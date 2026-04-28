@@ -271,3 +271,238 @@ class TestPaneLifecycleNotify:
         store.set_pane_lifecycle_notify("@1", None)
         assert store.get_pane_lifecycle_notify("@1", default=False) is False
         assert store.get_pane_lifecycle_notify("@1", default=True) is True
+
+
+class TestNotificationMode:
+    def test_default_is_all(self, store: WindowStateStore) -> None:
+        assert store.get_notification_mode("@1") == "all"
+
+    def test_set_and_get(self, store: WindowStateStore) -> None:
+        store.set_notification_mode("@1", "errors_only")
+        assert store.get_notification_mode("@1") == "errors_only"
+
+    def test_invalid_mode_raises(self, store: WindowStateStore) -> None:
+        with pytest.raises(ValueError):
+            store.set_notification_mode("@1", "bad")
+
+    def test_set_same_value_skips_save(self, store: WindowStateStore) -> None:
+        store.set_notification_mode("@1", "muted")
+        store._save_calls.clear()  # type: ignore[attr-defined]
+        store.set_notification_mode("@1", "muted")
+        assert store._save_calls == []  # type: ignore[attr-defined]
+
+    def test_cycle_all_to_errors_only(self, store: WindowStateStore) -> None:
+        assert store.cycle_notification_mode("@1") == "errors_only"
+
+    def test_cycle_errors_only_to_muted(self, store: WindowStateStore) -> None:
+        store.set_notification_mode("@1", "errors_only")
+        assert store.cycle_notification_mode("@1") == "muted"
+
+    def test_cycle_muted_to_all(self, store: WindowStateStore) -> None:
+        store.set_notification_mode("@1", "muted")
+        assert store.cycle_notification_mode("@1") == "all"
+
+
+class TestApprovalMode:
+    def test_default_is_normal(self, store: WindowStateStore) -> None:
+        assert store.get_approval_mode("@1") == "normal"
+
+    def test_unknown_window_returns_default(self, store: WindowStateStore) -> None:
+        assert store.get_approval_mode("@missing") == "normal"
+
+    def test_set_yolo(self, store: WindowStateStore) -> None:
+        store.set_window_approval_mode("@1", "yolo")
+        assert store.get_approval_mode("@1") == "yolo"
+
+    def test_case_insensitive(self, store: WindowStateStore) -> None:
+        store.set_window_approval_mode("@1", "YOLO")
+        assert store.get_approval_mode("@1") == "yolo"
+
+    def test_invalid_raises(self, store: WindowStateStore) -> None:
+        with pytest.raises(ValueError):
+            store.set_window_approval_mode("@1", "turbo")
+
+    def test_corrupt_stored_value_falls_back_to_default(
+        self, store: WindowStateStore
+    ) -> None:
+        store.get_window_state("@1").approval_mode = "garbage"
+        assert store.get_approval_mode("@1") == "normal"
+
+
+class TestBatchMode:
+    def test_default_is_batched(self, store: WindowStateStore) -> None:
+        assert store.get_batch_mode("@1") == "batched"
+
+    def test_unknown_window_returns_default(self, store: WindowStateStore) -> None:
+        assert store.get_batch_mode("@missing") == "batched"
+
+    def test_set_verbose(self, store: WindowStateStore) -> None:
+        store.set_batch_mode("@1", "verbose")
+        assert store.get_batch_mode("@1") == "verbose"
+
+    def test_invalid_raises(self, store: WindowStateStore) -> None:
+        with pytest.raises(ValueError):
+            store.set_batch_mode("@1", "stream")
+
+    def test_set_same_value_skips_save(self, store: WindowStateStore) -> None:
+        store.set_batch_mode("@1", "verbose")
+        store._save_calls.clear()  # type: ignore[attr-defined]
+        store.set_batch_mode("@1", "verbose")
+        assert store._save_calls == []  # type: ignore[attr-defined]
+
+    def test_cycle_batched_to_verbose(self, store: WindowStateStore) -> None:
+        assert store.cycle_batch_mode("@1") == "verbose"
+
+    def test_cycle_verbose_to_batched(self, store: WindowStateStore) -> None:
+        store.set_batch_mode("@1", "verbose")
+        assert store.cycle_batch_mode("@1") == "batched"
+
+    def test_corrupt_stored_value_falls_back_to_default(
+        self, store: WindowStateStore
+    ) -> None:
+        store.get_window_state("@1").batch_mode = "garbage"
+        assert store.get_batch_mode("@1") == "batched"
+
+
+class TestSetWindowOrigin:
+    def test_set_ccgram_created(self, store: WindowStateStore) -> None:
+        store.set_window_origin("@1", "ccgram_created")
+        assert store.window_states["@1"].origin == "ccgram_created"
+
+    def test_set_external_also_sets_external_flag(
+        self, store: WindowStateStore
+    ) -> None:
+        store.set_window_origin("@1", "external")
+        state = store.window_states["@1"]
+        assert state.origin == "external"
+        assert state.external is True
+
+    def test_non_external_origin_does_not_set_external_flag(
+        self, store: WindowStateStore
+    ) -> None:
+        store.set_window_origin("@1", "ccgram_created")
+        assert store.window_states["@1"].external is False
+
+    def test_invalid_origin_raises(self, store: WindowStateStore) -> None:
+        with pytest.raises(ValueError):
+            store.set_window_origin("@1", "unknown_origin")
+
+    def test_set_same_origin_skips_save(self, store: WindowStateStore) -> None:
+        store.set_window_origin("@1", "ccgram_created")
+        store._save_calls.clear()  # type: ignore[attr-defined]
+        store.set_window_origin("@1", "ccgram_created")
+        assert store._save_calls == []  # type: ignore[attr-defined]
+
+
+class TestSetWindowProvider:
+    def test_sets_provider(self, store: WindowStateStore) -> None:
+        store.set_window_provider("@1", "codex", new_provider_supports_hook=True)
+        assert store.window_states["@1"].provider_name == "codex"
+
+    def test_sets_cwd_when_provided(self, store: WindowStateStore) -> None:
+        store.set_window_provider(
+            "@1", "claude", cwd="/tmp/proj", new_provider_supports_hook=True
+        )
+        assert store.window_states["@1"].cwd == "/tmp/proj"
+
+    def test_hookless_switch_clears_session_fields(
+        self, store: WindowStateStore
+    ) -> None:
+        state = store.get_window_state("@1")
+        state.provider_name = "claude"
+        state.session_id = "abc123"
+        state.transcript_path = "/tmp/t.jsonl"
+        store.set_window_provider("@1", "shell", new_provider_supports_hook=False)
+        assert store.window_states["@1"].session_id == ""
+        assert store.window_states["@1"].transcript_path == ""
+
+    def test_hookless_switch_invokes_callback(self, store: WindowStateStore) -> None:
+        called: list[str] = []
+        store._on_hookless_provider_switch = called.append
+        state = store.get_window_state("@1")
+        state.provider_name = "claude"
+        store.set_window_provider("@1", "shell", new_provider_supports_hook=False)
+        assert called == ["@1"]
+
+    def test_hook_provider_does_not_clear_session(
+        self, store: WindowStateStore
+    ) -> None:
+        state = store.get_window_state("@1")
+        state.provider_name = "claude"
+        state.session_id = "keep-me"
+        store.set_window_provider("@1", "codex", new_provider_supports_hook=True)
+        assert store.window_states["@1"].session_id == "keep-me"
+
+    def test_empty_provider_name_reset_does_not_trigger_hookless_callback(
+        self, store: WindowStateStore
+    ) -> None:
+        called: list[str] = []
+        store._on_hookless_provider_switch = called.append
+        state = store.get_window_state("@1")
+        state.provider_name = "claude"
+        store.set_window_provider("@1", "", new_provider_supports_hook=False)
+        assert called == []
+
+    def test_same_provider_hookless_does_not_trigger_callback(
+        self, store: WindowStateStore
+    ) -> None:
+        called: list[str] = []
+        store._on_hookless_provider_switch = called.append
+        state = store.get_window_state("@1")
+        state.provider_name = "shell"
+        store.set_window_provider("@1", "shell", new_provider_supports_hook=False)
+        assert called == []
+
+
+class TestPruneStaleWindowStates:
+    def test_removes_stale_windows(self, store: WindowStateStore) -> None:
+        store.get_window_state("@1")
+        store.get_window_state("@2")
+        store.get_window_state("@3")
+        changed = store.prune_stale_window_states(
+            live_window_ids=set(),
+            session_map_wids=set(),
+            bound_window_ids=set(),
+        )
+        assert changed is True
+        assert store.window_states == {}
+
+    def test_keeps_live_windows(self, store: WindowStateStore) -> None:
+        store.get_window_state("@1")
+        store.get_window_state("@2")
+        changed = store.prune_stale_window_states(
+            live_window_ids={"@1"},
+            session_map_wids=set(),
+            bound_window_ids=set(),
+        )
+        assert changed is True
+        assert "@1" in store.window_states
+        assert "@2" not in store.window_states
+
+    def test_keeps_session_map_windows(self, store: WindowStateStore) -> None:
+        store.get_window_state("@1")
+        changed = store.prune_stale_window_states(
+            live_window_ids=set(),
+            session_map_wids={"@1"},
+            bound_window_ids=set(),
+        )
+        assert changed is False
+        assert "@1" in store.window_states
+
+    def test_keeps_bound_windows(self, store: WindowStateStore) -> None:
+        store.get_window_state("@1")
+        changed = store.prune_stale_window_states(
+            live_window_ids=set(),
+            session_map_wids=set(),
+            bound_window_ids={"@1"},
+        )
+        assert changed is False
+        assert "@1" in store.window_states
+
+    def test_no_stale_returns_false(self, store: WindowStateStore) -> None:
+        changed = store.prune_stale_window_states(
+            live_window_ids=set(),
+            session_map_wids=set(),
+            bound_window_ids=set(),
+        )
+        assert changed is False

@@ -25,6 +25,12 @@ def _clear_rate_limit_state():
 
 
 class TestRateLimitSend:
+    @pytest.fixture(autouse=True)
+    def _real_send_interval(self, monkeypatch):
+        # Conftest zeroes MESSAGE_SEND_INTERVAL for speed; restore the real
+        # value here so wait-time assertions hold.
+        monkeypatch.setattr("ccgram.handlers.message_sender.MESSAGE_SEND_INTERVAL", 0.5)
+
     async def test_first_call_no_wait(self) -> None:
         with patch(
             "ccgram.handlers.message_sender.asyncio.sleep",
@@ -70,6 +76,13 @@ class TestRateLimitSend:
 
 
 class TestSendWithFallback:
+    @pytest.fixture(autouse=True)
+    def _instant_retry_sleep(self, monkeypatch):
+        monkeypatch.setattr(
+            "ccgram.handlers.message_sender.asyncio.sleep",
+            AsyncMock(),
+        )
+
     async def test_entity_success(self) -> None:
         bot = AsyncMock()
         sent = AsyncMock(spec=Message)

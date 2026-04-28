@@ -336,7 +336,7 @@ class TestWindowStateBatchMode:
     def test_from_dict(self, data: dict[str, str], expected: str) -> None:
         assert WindowState.from_dict(data).batch_mode == expected
 
-    @pytest.mark.parametrize("mode", list(BATCH_MODES))
+    @pytest.mark.parametrize("mode", sorted(BATCH_MODES))
     def test_roundtrip(self, mode: str) -> None:
         ws = WindowState(session_id="s1", cwd="/tmp", batch_mode=mode)
         assert WindowState.from_dict(ws.to_dict()).batch_mode == mode

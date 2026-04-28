@@ -558,7 +558,7 @@ class TestBashCaptureCleanup:
         yield
         _bash_capture_tasks.clear()
 
-    async def test_cleanup_on_early_return(self) -> None:
+    async def test_cleanup_on_early_return(self, monkeypatch) -> None:
         from ccgram.handlers.text_handler import (
             _bash_capture_tasks,
             _capture_bash_output,
@@ -566,6 +566,7 @@ class TestBashCaptureCleanup:
 
         key = (999, 888)
 
+        monkeypatch.setattr(f"{_TH}.asyncio.sleep", AsyncMock())
         with (
             patch(f"{_TH}.tmux_manager") as mock_tm,
             patch(f"{_TH}.thread_router") as mock_tr,
