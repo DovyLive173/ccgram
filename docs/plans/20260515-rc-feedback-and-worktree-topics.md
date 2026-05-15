@@ -276,14 +276,14 @@ Set on window creation in `topic_orchestration.py` when the flow took the worktr
 
 ### Task 6: Verify acceptance criteria
 
-- [ ] verify all Overview requirements implemented: RC feedback fires on both button and forwarded slash; worktree picker appears only for eligible git repos; non-git flow unchanged
-- [ ] verify all edge cases handled: double-tap on RC button (no second probe); cancel at every worktree step; invalid branch name; dirty source repo (allowed with warning); mid-rebase repo (worktree picker skipped)
-- [ ] run full unit test suite: `make test`
-- [ ] run integration test suite: `make test-integration`
-- [ ] run lint + typecheck + lazy-import lint: `make lint && make typecheck`
-- [ ] confirm `tests/ccgram/test_query_layer_only_for_handlers.py` still passes (no new violations)
-- [ ] confirm `tests/integration/test_import_no_cycles.py` still passes (no new cycles)
-- [ ] manual smoke (in a real Telegram session in the worktree's running bot instance): trigger `/remote-control` via button → see status reply; create a new topic in a git repo → exercise both worktree branches; create one in a non-git dir → confirm no flow change
+- [x] verify all Overview requirements implemented: RC feedback fires on both button and forwarded slash; worktree picker appears only for eligible git repos; non-git flow unchanged — test_status_bar_actions + test_forward arming tests, test_worktree eligibility, test_worktree_flow non-git skip all pass
+- [x] verify all edge cases handled: double-tap on RC button (no second probe); cancel at every worktree step; invalid branch name; dirty source repo (allowed with warning); mid-rebase repo (worktree picker skipped) — covered across test_rc_probe double-tap guard, test_worktree (bare/detached/rebase/validate_branch_name), test_directory_callbacks cancel paths, build_worktree_confirm dirty test
+- [x] run full unit test suite: `make test` — 4846 passed, 28 skipped; only `test_doctor_cmd.py::test_reports_missing_hooks_for_codex_provider` fails (pre-existing environmental — codex hooks installed on this machine, documented in Tasks 1–5, unrelated)
+- [x] run integration test suite: `make test-integration` — 274 passed
+- [x] run lint + typecheck + lazy-import lint: `make lint && make typecheck` — lint-lazy clean, ruff clean, pyright exit 0
+- [x] confirm `tests/ccgram/test_query_layer_only_for_handlers.py` still passes (no new violations) — passed (part of 260-test guard run)
+- [x] confirm `tests/integration/test_import_no_cycles.py` still passes (no new cycles) — passed (162 modules enumerated, all green)
+- [x] manual smoke (skipped - not automatable; requires a live Telegram session against the running bot instance — see Post-Completion manual verification)
 
 ### Task 7: Update documentation
 
