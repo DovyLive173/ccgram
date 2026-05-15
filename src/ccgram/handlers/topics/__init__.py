@@ -28,6 +28,7 @@ from .directory_browser import (
     build_worktree_picker,
     clear_browse_state,
     clear_window_picker_state,
+    clear_worktree_state,
     get_favorites,
 )
 from .directory_callbacks import handle_directory_callback
@@ -68,6 +69,7 @@ __all__ = [
     "check_autoclose_timers",
     "check_unbound_window_ttl",
     "clear_browse_state",
+    "clear_worktree_state",
     "clear_topic_create_retry",
     "clear_window_picker_state",
     "collect_target_chats",

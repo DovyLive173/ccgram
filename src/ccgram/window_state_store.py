@@ -132,6 +132,10 @@ class WindowState:
             it has posted a verdict. In-memory only (NOT serialized) —
             transient and safe to drop on restart.
         rc_armed_at: ``time.monotonic()`` at probe arm. In-memory only.
+        worktree_path: Absolute path of the git worktree this window was
+            created in (None when the topic kept the current branch).
+            Persisted — a forward investment for the eventual cleanup UX.
+        worktree_branch: Branch name created for ``worktree_path``.
     """
 
     session_id: str = ""
@@ -151,6 +155,8 @@ class WindowState:
     # to_dict/from_dict (drops on restart).
     rc_probe_state: Literal["armed", "classified"] | None = None
     rc_armed_at: float | None = None
+    worktree_path: str | None = None
+    worktree_branch: str | None = None
 
     def to_dict(self) -> dict[str, Any]:  # noqa: C901
         d: dict[str, Any] = {
@@ -179,6 +185,10 @@ class WindowState:
             d["panes"] = {pid: p.to_dict() for pid, p in self.panes.items()}
         if self.pane_lifecycle_notify is not None:
             d["pane_lifecycle_notify"] = self.pane_lifecycle_notify
+        if self.worktree_path:
+            d["worktree_path"] = self.worktree_path
+        if self.worktree_branch:
+            d["worktree_branch"] = self.worktree_branch
         return d
 
     @classmethod
@@ -213,6 +223,8 @@ class WindowState:
             ),
             panes=panes,
             pane_lifecycle_notify=data.get("pane_lifecycle_notify"),
+            worktree_path=data.get("worktree_path"),
+            worktree_branch=data.get("worktree_branch"),
         )
 
 

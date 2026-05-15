@@ -42,6 +42,13 @@ from ..callback_data import (
     CB_WT_NEW,
     CB_WT_USE_CURRENT,
 )
+from ..user_state import (
+    AWAITING_WORKTREE_BRANCH_NAME,
+    PENDING_WORKTREE_BRANCH,
+    PENDING_WORKTREE_DIRTY,
+    PENDING_WORKTREE_PATH,
+    PENDING_WORKTREE_REPO,
+)
 
 # Max favorites shown in directory browser
 _MAX_FAVORITES = 5
@@ -94,6 +101,19 @@ def clear_browse_state(user_data: dict | None) -> None:
         user_data.pop(BROWSE_PATH_KEY, None)
         user_data.pop(BROWSE_PAGE_KEY, None)
         user_data.pop(BROWSE_DIRS_KEY, None)
+
+
+def clear_worktree_state(user_data: dict | None) -> None:
+    """Clear worktree-picker flow state keys from user_data."""
+    if user_data is not None:
+        for key in (
+            PENDING_WORKTREE_REPO,
+            PENDING_WORKTREE_BRANCH,
+            PENDING_WORKTREE_PATH,
+            PENDING_WORKTREE_DIRTY,
+            AWAITING_WORKTREE_BRANCH_NAME,
+        ):
+            user_data.pop(key, None)
 
 
 def clear_window_picker_state(user_data: dict | None) -> None:

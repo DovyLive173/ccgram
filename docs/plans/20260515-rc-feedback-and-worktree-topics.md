@@ -260,19 +260,19 @@ Set on window creation in `topic_orchestration.py` when the flow took the worktr
 - Modify: `src/ccgram/handlers/text/text_handler.py`
 - Modify: `tests/ccgram/handlers/topics/test_directory_callbacks.py` (or create)
 
-- [ ] add `worktree_path: str | None = None`, `worktree_branch: str | None = None` to `WindowState`; serialize and load (backward-compat for old state.json)
-- [ ] in `handle_directory_callback`, add prefix dispatches for the four new CB_WT_* constants
-- [ ] in `_handle_confirm`: after directory is confirmed, call `check_worktree_eligibility`. If eligible → store repo path in user_data and edit-message to worktree picker. If not → fall through to provider picker as today
-- [ ] implement `_handle_wt_use_current`: clear worktree user_data, fall through to provider picker with the original directory as cwd
-- [ ] implement `_handle_wt_new`: suggest branch name, store in user_data, edit-message to worktree confirm
-- [ ] implement `_handle_wt_confirm`: call `create_worktree`, on success store path/branch in user_data, fall through to provider picker with worktree path as cwd. On failure: edit-message with one-line error and a Cancel button
-- [ ] implement `_handle_wt_edit_name`: set `AWAITING_WORKTREE_BRANCH_NAME = True` in user_data, send "Send branch name, or /cancel."
-- [ ] in `text_handler.py`, add a guard at the top: if `AWAITING_WORKTREE_BRANCH_NAME` in user_data → route to `_handle_worktree_name_reply` (validate via `validate_branch_name`; on success update suggested branch, re-show confirm; on failure → reply "Invalid branch name; try again or /cancel."). Clear flag on /cancel or success
-- [ ] in `topic_orchestration.py`: when window is created, if `PENDING_WORKTREE_PATH` is set in user_data, persist `worktree_path` and `worktree_branch` to the new `WindowState`. Clear all worktree user_data keys after window creation
-- [ ] write integration test using a real git fixture repo: confirm directory → assert worktree picker shown → tap "Use current branch" → assert provider picker shown next; tap "New worktree" → assert confirm shown → tap "Use this" → assert worktree created at expected path AND `WindowState.worktree_path` is set
-- [ ] write integration test for the edit-name text-reply path
-- [ ] write integration test for non-git directory: assert worktree picker is skipped (provider picker shown directly)
-- [ ] run `make check` — must pass before Task 6
+- [x] add `worktree_path: str | None = None`, `worktree_branch: str | None = None` to `WindowState`; serialize and load (backward-compat for old state.json) — `to_dict` omits when unset, `from_dict` uses `.get()` for old files
+- [x] in `handle_directory_callback`, add prefix dispatches for the four new CB_WT_* constants — routed via one `_handle_worktree_callback` sub-dispatcher (keeps `handle_directory_callback` under the PLR0912 branch cap) + added to the `@register(...)` list
+- [x] in `_handle_confirm`: after directory is confirmed, call `check_worktree_eligibility`. If eligible → store repo path + dirty flag in user_data and edit-message to worktree picker. If not → fall through to provider picker as today (extracted `_show_provider_picker` helper)
+- [x] implement `_handle_wt_use_current`: clear worktree user_data, fall through to provider picker with the original directory as cwd
+- [x] implement `_handle_wt_new`: suggest branch name, store in user_data, edit-message to worktree confirm (dirty cached from `_handle_confirm` via `PENDING_WORKTREE_DIRTY` — no re-probe)
+- [x] implement `_handle_wt_confirm`: call `create_worktree`, on success store path/branch in user_data + set `BROWSE_PATH_KEY` to the worktree path, fall through to provider picker. On failure: edit-message with one-line error and a Cancel button
+- [x] implement `_handle_wt_edit_name`: set `AWAITING_WORKTREE_BRANCH_NAME = True` in user_data, edit-message "Send the branch name… or tap Cancel"
+- [x] in `text_handler.py`, add a guard at the top: if `AWAITING_WORKTREE_BRANCH_NAME` in user_data → route to `_handle_worktree_name_reply` (validate via `validate_branch_name`; on success update branch, re-show confirm as a fresh message with keyboard; on failure → reply "Invalid branch name; try again or tap Cancel."). Guard placed before `_check_ui_guards` (STATE_BROWSING_DIRECTORY is still set during the worktree step). Cancel handled by the inline Cancel button (`/cancel` is a command, never reaches text_handler)
+- [x] persist `worktree_path`/`worktree_branch` to the new `WindowState` on window creation — ⚠️ plan said `topic_orchestration.py`, but user-flow window creation (with `context.user_data`) happens in `directory_callbacks._create_window_and_bind`; `topic_orchestration.handle_new_window` handles externally-detected windows with no user_data. Implemented in `_create_window_and_bind` via `_persist_worktree_state(window_id, cwd, context)` (guards on `cwd == pending worktree path` so a stale path from an aborted attempt can't attach to an unrelated window), then clears all worktree user_data keys. `clear_worktree_state` also called from `_handle_cancel`. New `SessionManager.set_window_worktree` added to the query-layer allow-list
+- [x] write integration test using a real git fixture repo: confirm directory → assert worktree picker shown → tap "Use current branch" → assert provider picker shown next; tap "New worktree" → assert confirm shown → tap "Use this" → assert worktree created at expected path AND `WindowState.worktree_path` is set (`tests/integration/test_worktree_flow.py`)
+- [x] write integration test for the edit-name text-reply path (valid → reconfirm, invalid → reprompt, inactive when flag unset)
+- [x] write integration test for non-git directory: assert worktree picker is skipped (provider picker shown directly)
+- [x] run `make check` — fmt/lint-lazy/lint/typecheck clean; 4846 unit pass; 274 integration pass (incl. `test_worktree_flow.py`, import-cycle 162, query-layer guards). ⚠️ only `test_doctor_cmd.py::test_reports_missing_hooks_for_codex_provider` fails — same pre-existing environmental failure documented in Tasks 1–4 (codex hooks installed on this machine; verified it fails identically on stashed/clean tree; Task 5 touches no doctor code)
 
 ### Task 6: Verify acceptance criteria
 
