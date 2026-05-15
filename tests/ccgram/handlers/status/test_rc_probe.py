@@ -76,8 +76,22 @@ class TestClassifyRcOutput:
         assert "error" in out.detail.lower()
 
     def test_failed_keyword(self) -> None:
-        out = classify_rc_output("connection failed after retry")
+        out = classify_rc_output("/remote-control\nconnection failed after retry")
         assert out.kind is RCOutcomeKind.FAILED
+
+    def test_unanchored_error_in_scrollback_is_pending(self) -> None:
+        text = "TypeError: boom\nthe build failed\nrunning tests..."
+        assert classify_rc_output(text).kind is RCOutcomeKind.PENDING
+
+    def test_error_before_anchor_not_failed(self) -> None:
+        text = "compilation error in foo.py\n/remote-control\nConnecting…"
+        assert classify_rc_output(text).kind is RCOutcomeKind.PENDING
+
+    def test_error_after_anchor_is_failed(self) -> None:
+        text = "all good\n/rc\nFatal error: connection refused"
+        out = classify_rc_output(text)
+        assert out.kind is RCOutcomeKind.FAILED
+        assert "error" in out.detail.lower()
 
     def test_pending_no_match(self) -> None:
         out = classify_rc_output("just some normal terminal output\n$ ")

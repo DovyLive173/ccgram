@@ -54,6 +54,10 @@ _UNAVAILABLE_RE = re.compile(
     r"(?i)\b(?:not available|requires|upgrade|permission denied|unknown command)\b"
 )
 _FAILED_RE = re.compile(r"(?i)\b(?:error|failed)\b")
+# The /remote-control (or /rc) echo we just sent. "unavailable"/"failed"
+# words are only the command's outcome when they appear at or after this
+# line — pre-RC scrollback routinely contains "error"/"requires"/etc.
+_RC_ANCHOR_RE = re.compile(r"(?i)/remote-control\b|/rc\b")
 
 
 class RCOutcomeKind(Enum):
@@ -82,8 +86,11 @@ def classify_rc_output(text: str) -> RCOutcome:
     """Classify the last lines of captured pane text.
 
     Priority: a Remote Control URL means RC actually started (success)
-    and wins over everything; then "unavailable" entitlement phrases;
-    then generic error/failed lines; otherwise pending (retry).
+    and wins everywhere. Otherwise "unavailable" / generic error lines
+    count only at or after the most recent ``/remote-control`` (``/rc``)
+    echo — pre-RC scrollback routinely contains "error"/"failed"/
+    "requires" and must not be misread as the command's outcome. No
+    anchor and no URL → pending (keep polling).
     """
     if not text:
         return RCOutcome(RCOutcomeKind.PENDING)
@@ -96,11 +103,19 @@ def classify_rc_output(text: str) -> RCOutcome:
     if url_match:
         return RCOutcome(RCOutcomeKind.SUCCESS, url_match.group(0))
 
-    for line in tail:
+    anchor = next(
+        (i for i in range(len(tail) - 1, -1, -1) if _RC_ANCHOR_RE.search(tail[i])),
+        None,
+    )
+    if anchor is None:
+        return RCOutcome(RCOutcomeKind.PENDING)
+    scoped = tail[anchor:]
+
+    for line in scoped:
         if _UNAVAILABLE_RE.search(line):
             return RCOutcome(RCOutcomeKind.UNAVAILABLE, line)
 
-    for line in tail:
+    for line in scoped:
         if _FAILED_RE.search(line):
             return RCOutcome(RCOutcomeKind.FAILED, line)
 
