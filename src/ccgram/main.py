@@ -13,11 +13,11 @@ import ``main`` only for ``_shutdown_signal`` and ``__version__``) do
 not pay PTB or aiohttp startup cost.
 """
 
+import asyncio
 import logging
 import os
 import signal
 import sys
-from types import FrameType
 from typing import TYPE_CHECKING
 
 import structlog
@@ -35,27 +35,35 @@ _shutdown_signal = 0
 _miniapp_runner: "web.AppRunner | None" = None
 
 
-def _install_signal_handlers() -> None:
-    """Install signal handlers that record the signal and trigger PTB shutdown.
+def _on_signal(signum: int) -> None:
+    """Record the shutdown signal and raise SystemExit to stop PTB.
+
+    Registered via ``loop.add_signal_handler`` so it runs as an event-loop
+    callback at a safe point — never injected at an arbitrary bytecode
+    boundary inside a background task's sync I/O (which made the SystemExit
+    surface as a "Background task failed" traceback and left PTB running).
+    Mirrors PTB's own ``_raise_system_exit`` mechanism; the SystemExit
+    propagates out of ``loop.run_forever()`` into PTB's graceful shutdown.
+    """
+    global _shutdown_signal
+    _shutdown_signal = signum
+    sig_name = signal.Signals(signum).name
+    sys.stderr.write(f"\n[ccgram] {sig_name} received (pid={os.getpid()})\n")
+    sys.stderr.flush()
+    raise SystemExit
+
+
+def _install_signal_handlers(loop: asyncio.AbstractEventLoop) -> None:
+    """Install asyncio signal handlers that trigger a graceful PTB shutdown.
 
     PTB's default signal handling catches SIGINT/SIGTERM/SIGABRT and exits
     with code 0 after graceful shutdown.  The restart.sh supervisor needs the
     real signal exit code (130 for SIGINT=restart, 131 for SIGQUIT=stop), so
-    we install our own handlers and tell PTB not to override them via
-    ``stop_signals=None``.
+    we register our own loop signal handlers (recording the signum) and tell
+    PTB not to override them via ``stop_signals=None``.
     """
-
-    def _on_signal(signum: int, _frame: FrameType | None) -> None:
-        global _shutdown_signal
-        _shutdown_signal = signum
-        sig_name = signal.Signals(signum).name
-        sys.stderr.write(f"\n[ccgram] {sig_name} received (pid={os.getpid()})\n")
-        sys.stderr.flush()
-        raise SystemExit
-
-    signal.signal(signal.SIGINT, _on_signal)
-    signal.signal(signal.SIGTERM, _on_signal)
-    signal.signal(signal.SIGQUIT, _on_signal)
+    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGQUIT):
+        loop.add_signal_handler(sig, _on_signal, sig)
 
 
 def _reraise_shutdown_signal() -> None:
@@ -197,8 +205,13 @@ def run_bot() -> None:
     # Lazy: main runs `ccgram` startup; defer imports until the relevant subcommand executes
     from .bot import create_bot
 
+    # Create the loop here so signal handlers can be registered on it before
+    # run_polling() blocks. PTB's __run reuses the loop set via set_event_loop.
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
     application = create_bot()
-    _install_signal_handlers()
+    _install_signal_handlers(loop)
     application.run_polling(
         allowed_updates=["message", "callback_query"],
         stop_signals=None,

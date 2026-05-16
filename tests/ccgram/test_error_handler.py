@@ -3,7 +3,6 @@
 import contextlib
 import io
 import signal
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from telegram.error import BadRequest, Conflict, NetworkError, TelegramError
@@ -132,44 +131,31 @@ class TestShutdownNotification:
             await _send_shutdown_notification(app)
 
 
-def _get_signal_handler() -> Any:
-    """Install signal handlers and return the SIGINT handler as a callable."""
-    from ccgram.main import _install_signal_handlers
-
-    _install_signal_handlers()
-    handler = signal.getsignal(signal.SIGINT)
-    assert callable(handler)
-    return handler
-
-
 class TestSignalDiagnostics:
-    def test_signal_handler_logs_stack_in_debug(self) -> None:
-        handler = _get_signal_handler()
+    def test_signal_handler_records_signum_and_raises(self) -> None:
+        from ccgram import main
 
         stderr_capture = io.StringIO()
         with (
-            patch("ccgram.main.logging.getLogger") as mock_get_logger,
+            patch.object(main, "_shutdown_signal", 0),
             patch("sys.stderr", stderr_capture),
         ):
-            mock_get_logger.return_value.isEnabledFor.return_value = True
             with contextlib.suppress(SystemExit):
-                handler(signal.SIGINT, None)
-
-        output = stderr_capture.getvalue()
-        assert "SIGINT" in output
-
-    def test_signal_handler_minimal_in_info(self) -> None:
-        handler = _get_signal_handler()
-
-        stderr_capture = io.StringIO()
-        with (
-            patch("ccgram.main.logging.getLogger") as mock_get_logger,
-            patch("sys.stderr", stderr_capture),
-        ):
-            mock_get_logger.return_value.isEnabledFor.return_value = False
-            with contextlib.suppress(SystemExit):
-                handler(signal.SIGINT, None)
+                main._on_signal(signal.SIGINT)
+            assert main._shutdown_signal == signal.SIGINT
 
         output = stderr_capture.getvalue()
         assert "SIGINT" in output
         assert "call stack" not in output
+
+    def test_install_uses_loop_add_signal_handler(self) -> None:
+        from ccgram.main import _install_signal_handlers, _on_signal
+
+        loop = MagicMock()
+        _install_signal_handlers(loop)
+
+        registered = {call.args[0] for call in loop.add_signal_handler.call_args_list}
+        assert registered == {signal.SIGINT, signal.SIGTERM, signal.SIGQUIT}
+        for call in loop.add_signal_handler.call_args_list:
+            assert call.args[1] is _on_signal
+            assert call.args[2] == call.args[0]
