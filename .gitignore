@@ -72,3 +72,8 @@ progress*.txt
 
 # Runtime uploads
 .ccgram-uploads/
+gemini-system-settings.json
+monitor_state.json
+session_map.json
+session_map.lock
+state.json
