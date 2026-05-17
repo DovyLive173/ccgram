@@ -52,8 +52,29 @@ git push origin webhook-support --force
 - **Diagnostic Tool:** `ccgram doctor`
 - **Service Status:** `systemctl status ccgram`
 
-## Rollback Procedure
-If a rebase or patch breaks the bot:
-1. Identify the last working commit: `git log`
-2. Reset the branch: `git reset --hard <commit_hash>`
-3. Restart service: `sudo systemctl restart ccgram`
+## Webhook Mode (Opt-In Transport)
+The webhook transport runs via the standalone `webhook_runner.py` wrapper to isolate network logic from the core application. 
+
+### Migration (Polling ↔ Webhook)
+To switch to webhook mode:
+1. Define the variables in `~/.ccgram/.env`:
+   ```env
+   WEBHOOK_URL=https://your-domain.com/secret-path
+   WEBHOOK_PORT=8084
+   WEBHOOK_LISTEN=0.0.0.0
+   WEBHOOK_SECRET_TOKEN=your_secure_random_string
+   ```
+2. Restart the service: `sudo systemctl restart ccgram`
+
+### Rollback & Fallback
+- **Automatic Fallback:** If `ccgram` fails to bind the local `WEBHOOK_PORT` (e.g., port in use), it catches the exception, recreates the `asyncio` event loop safely, and automatically falls back to `Polling mode active`.
+- **Manual Rollback:** To forcefully rollback to Polling, remove the `WEBHOOK_URL` from the `.env` file and restart the service. The webhook is automatically deleted from Telegram's side by `python-telegram-bot` when polling initializes.
+
+### Webhook State & Duplicate Protection
+- `python-telegram-bot` strictly handles the `deleteWebhook` API call. Whenever polling initializes, it guarantees that any active webhook on the Telegram server is removed. This prevents duplicate update deliveries.
+- The built-in PTB retry loop automatically applies exponential backoff if the Telegram API encounters errors or timeouts.
+
+### Diagnostics & Future Enhancements
+- **Verify Status:** `sudo journalctl -u ccgram -f` (Look for `Webhook registration triggered` or `Polling mode active`).
+- **Health Checks:** Currently, health checks rely on systemd (`systemctl status ccgram`). In the future, a dedicated `{"status": "ok"}` health endpoint can be mounted directly on the aiohttp Mini App runner or a custom Tornado route within `webhook_runner.py` to allow load balancers to poll service health.
+
