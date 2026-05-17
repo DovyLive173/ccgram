@@ -113,8 +113,6 @@ def _use_colors(stream: object) -> bool:
     Keeps raw ANSI escapes out of redirected/piped log files while still
     coloring the interactive tmux pane the daemon runs in.
     """
-    # Presence-based, per the NO_COLOR / FORCE_COLOR conventions: set with any
-    # value (including empty) counts. NO_COLOR wins over FORCE_COLOR.
     if "NO_COLOR" in os.environ:
         return False
     if "FORCE_COLOR" in os.environ:
@@ -133,18 +131,41 @@ def _log_level_styles() -> dict[str, str]:
     styles = structlog.dev.ConsoleRenderer.get_default_level_styles().copy()
     styles.update(
         {
-            "debug": _GRAY_ON,  # grey — recedes on a dark terminal
-            "info": "\x1b[32m",  # green — normal flow (structlog default)
-            "warning": "\x1b[1;33m",  # bold yellow
+            "debug": _GRAY_ON,
+            "info": "\x1b[32m",
+            "warning": "\x1b[1;33m",
             "warn": "\x1b[1;33m",
-            "error": "\x1b[1;31m",  # bold red
-            "exception": "\x1b[1;31m",  # bold red
-            "critical": "\x1b[1;91m",  # bold bright red
+            "error": "\x1b[1;31m",
+            "exception": "\x1b[1;31m",
+            "critical": "\x1b[1;91m",
         }
     )
     return styles
 
 
+def _mask_secrets(logger: logging.Logger, log_method: str, event_dict: dict) -> dict:
+    """Mask sensitive tokens in log outputs."""
+    secrets = [os.environ.get("WEBHOOK_SECRET_TOKEN"), os.environ.get("TELEGRAM_BOT_TOKEN")]
+    secrets = [s for s in secrets if s and len(s) > 4]
+
+    if not secrets:
+        return event_dict
+
+    for k, v in event_dict.items():
+        if isinstance(v, str):
+            for secret in secrets:
+                if secret in v:
+                    v = v.replace(secret, "***MASKED***")
+            event_dict[k] = v
+
+    event = event_dict.get("event")
+    if isinstance(event, str):
+        for secret in secrets:
+            if secret in event:
+                event = event.replace(secret, "***MASKED***")
+        event_dict["event"] = event
+
+    return event_dict
 def setup_logging(log_level: str) -> None:
     """Configure structured, colored logging for interactive CLI use."""
     numeric_level = getattr(logging, log_level, None)
@@ -159,6 +180,7 @@ def setup_logging(log_level: str) -> None:
         processors=[
             structlog.contextvars.merge_contextvars,
             structlog.stdlib.add_log_level,
+            _mask_secrets,
             structlog.stdlib.PositionalArgumentsFormatter(),
             structlog.processors.TimeStamper(fmt="%H:%M:%S"),
             structlog.processors.StackInfoRenderer(),
