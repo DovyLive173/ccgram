@@ -189,9 +189,17 @@ class Config:
         self._init_lifecycle()
 
         # Global default for hiding tool_use/tool_result content in Telegram.
+        # Shown by default; set CCGRAM_HIDE_TOOL_CALLS=true to suppress globally.
         # Per-window override via WindowState.tool_call_visibility takes precedence.
         self.hide_tool_calls: bool = os.getenv(
-            "CCGRAM_HIDE_TOOL_CALLS", "true"
+            "CCGRAM_HIDE_TOOL_CALLS", "false"
+        ).lower() in ("1", "true", "yes")
+
+        # Global default batch mode: ephemeral tools (single rolling message deleted
+        # on completion). Off by default. Per-window batch_mode takes precedence when
+        # explicitly set to any value other than DEFAULT_BATCH_MODE via /verbose.
+        self.ephemeral_tools: bool = os.getenv(
+            "CCGRAM_EPHEMERAL_TOOLS", ""
         ).lower() in ("1", "true", "yes")
 
         # Color mapping for the topic state emoji prefix.

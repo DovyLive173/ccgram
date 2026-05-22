@@ -62,10 +62,21 @@ def get_approval_mode(window_id: str) -> str:
 
 
 def get_batch_mode(window_id: str) -> str:
-    """Get batch mode for a window (default: 'batched')."""
+    """Get batch mode for a window.
+
+    Per-window value wins when the state row exists with a valid mode.
+    Falls through to global config (ephemeral_tools) only when no row exists
+    or the stored mode is invalid.
+    """
     state = window_store.window_states.get(window_id)
-    mode = state.batch_mode if state else DEFAULT_BATCH_MODE
-    return mode if mode in BATCH_MODES else DEFAULT_BATCH_MODE
+    if state and state.batch_mode in BATCH_MODES:
+        return state.batch_mode
+    return "ephemeral" if config.ephemeral_tools else DEFAULT_BATCH_MODE
+
+
+def is_ephemeral_tools(window_id: str) -> bool:
+    """Return True if the resolved batch mode for window_id is 'ephemeral'."""
+    return get_batch_mode(window_id) == "ephemeral"
 
 
 def get_tool_call_visibility(window_id: str) -> str:

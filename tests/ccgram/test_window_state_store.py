@@ -398,11 +398,20 @@ class TestBatchMode:
         store.set_batch_mode("@1", "verbose")
         assert store._save_calls == []  # type: ignore[attr-defined]
 
-    def test_cycle_batched_to_verbose(self, store: WindowStateStore) -> None:
+    def test_cycle_batched_to_ephemeral(self, store: WindowStateStore) -> None:
+        assert store.cycle_batch_mode("@1") == "ephemeral"
+
+    def test_cycle_ephemeral_to_verbose(self, store: WindowStateStore) -> None:
+        store.set_batch_mode("@1", "ephemeral")
         assert store.cycle_batch_mode("@1") == "verbose"
 
     def test_cycle_verbose_to_batched(self, store: WindowStateStore) -> None:
         store.set_batch_mode("@1", "verbose")
+        assert store.cycle_batch_mode("@1") == "batched"
+
+    def test_cycle_full_loop(self, store: WindowStateStore) -> None:
+        assert store.cycle_batch_mode("@1") == "ephemeral"
+        assert store.cycle_batch_mode("@1") == "verbose"
         assert store.cycle_batch_mode("@1") == "batched"
 
     def test_corrupt_stored_value_falls_back_to_default(

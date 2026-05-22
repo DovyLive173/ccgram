@@ -39,11 +39,12 @@ from .user_preferences import (
 )
 from .window_resolver import EMDASH_SESSION_PREFIX, is_foreign_window, is_window_id
 from .window_view import WindowView
+from .window_query import get_batch_mode as _wq_get_batch_mode
 from .window_state_store import (
     APPROVAL_MODES,
     BATCH_MODES,
     DEFAULT_APPROVAL_MODE,
-    DEFAULT_BATCH_MODE,
+    _BATCH_CYCLE,
     WindowState,
     WindowStateStore,
     install_window_store,
@@ -658,10 +659,8 @@ class SessionManager:
     # --- Batch mode ---
 
     def get_batch_mode(self, window_id: str) -> str:
-        """Get batch mode for a window (default: 'batched')."""
-        state = self.window_states.get(window_id)
-        mode = state.batch_mode if state else DEFAULT_BATCH_MODE
-        return mode if mode in BATCH_MODES else DEFAULT_BATCH_MODE
+        """Get batch mode for a window."""
+        return _wq_get_batch_mode(window_id)
 
     def set_batch_mode(self, window_id: str, mode: str) -> None:
         """Set batch mode for a window."""
@@ -673,9 +672,9 @@ class SessionManager:
             self._save_state()
 
     def cycle_batch_mode(self, window_id: str) -> str:
-        """Toggle batch mode: batched ↔ verbose. Returns new mode."""
+        """Cycle batch mode: batched → ephemeral → verbose → batched. Returns new mode."""
         current = self.get_batch_mode(window_id)
-        new_mode = "verbose" if current == "batched" else "batched"
+        new_mode = _BATCH_CYCLE.get(current, "ephemeral")
         self.set_batch_mode(window_id, new_mode)
         return new_mode
 

@@ -54,6 +54,11 @@ async def verbose_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -
             update.message,
             "⚡ Tool calls will be *batched* into a single message.",
         )
+    elif new_mode == "ephemeral":
+        await safe_reply(
+            update.message,
+            "🫧 Tool calls shown live, removed when the reply is ready (ephemeral).",
+        )
     else:
         await safe_reply(
             update.message,

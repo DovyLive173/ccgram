@@ -93,7 +93,7 @@ Each Telegram Forum topic binds to one tmux window. Messages you type are sent a
 - **Completion summaries** — when an agent finishes, a single-line LLM summary of what was accomplished edits the Ready message in-place (~1-2s delay; static enriched Ready appears immediately)
 - **Enriched Ready message** — task checklist, turn count, and last status shown on completion
 - **Tool results** — tool use/result pairs, thinking content, Bash exit codes, and error/success indicators in batched output
-- **Tool-call visibility toggle** — `CCGRAM_HIDE_TOOL_CALLS=true` globally hides `tool_use`/`tool_result` messages; `/toolcalls` cycles per-window (`default → shown → hidden`). Hook events (Stop, errors, subagent updates) bypass the gate
+- **Tool-call visibility toggle** — `tool_use`/`tool_result` messages are shown by default; `CCGRAM_HIDE_TOOL_CALLS=true` suppresses them globally and `/toolcalls` cycles per-window (`default → shown → hidden`). Hook events (Stop, errors, subagent updates) bypass the gate
 - **Entity-based formatting** — markdown converted to plain text + MessageEntity offsets; automatic plain text fallback, no parse errors
 
 ### Session Management
@@ -245,7 +245,7 @@ Open your Telegram group, create a new topic, send a message — a directory bro
 | `CCGRAM_<NAME>_COMMAND`        | _(from provider)_              | Override launch command per provider                                                                        |
 | `CCGRAM_GROUP_ID`              | _(all groups)_                 | Restrict to one Telegram group                                                                              |
 | `CCGRAM_STATUS_MODE`           | `system`                       | Topic emoji color scheme: `system` (green=working) or `user` (green=ready)                                  |
-| `CCGRAM_HIDE_TOOL_CALLS`       | `true`                         | Global default for hiding `tool_use`/`tool_result` messages                                                 |
+| `CCGRAM_HIDE_TOOL_CALLS`       | `false`                        | Set `true` to hide `tool_use`/`tool_result` messages globally (shown by default)                            |
 | `CCGRAM_LLM_PROVIDER`          | _(disabled)_                   | LLM for shell command generation + completion summaries                                                     |
 | `CCGRAM_LLM_API_KEY`           | _(empty)_                      | LLM API key (env only)                                                                                      |
 | `CCGRAM_WHISPER_PROVIDER`      | _(disabled)_                   | Whisper provider for voice transcription (`openai`, `groq`)                                                 |

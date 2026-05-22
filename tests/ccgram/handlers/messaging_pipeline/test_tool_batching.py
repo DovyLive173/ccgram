@@ -24,11 +24,11 @@ from ccgram.handlers.messaging_pipeline.tool_batch import (
 )
 from ccgram.session import (
     BATCH_MODES,
-    DEFAULT_BATCH_MODE,
     SessionManager,
     WindowState,
     window_store,
 )
+from ccgram.window_state_store import DEFAULT_BATCH_MODE
 from ccgram.telegram_draft import mark_draft_unavailable, reset_draft_state
 
 
@@ -374,7 +374,11 @@ class TestSessionManagerBatchMode:
 
     @pytest.mark.parametrize(
         ("start", "expected"),
-        [("batched", "verbose"), ("verbose", "batched")],
+        [
+            ("batched", "ephemeral"),
+            ("ephemeral", "verbose"),
+            ("verbose", "batched"),
+        ],
     )
     def test_cycle(self, mgr: SessionManager, start: str, expected: str) -> None:
         mgr.set_batch_mode("@0", start)
@@ -382,6 +386,8 @@ class TestSessionManagerBatchMode:
         assert mgr.get_batch_mode("@0") == expected
 
     def test_cycle_full_circle(self, mgr: SessionManager) -> None:
+        mgr.cycle_batch_mode("@0")
+        assert mgr.get_batch_mode("@0") == "ephemeral"
         mgr.cycle_batch_mode("@0")
         assert mgr.get_batch_mode("@0") == "verbose"
         mgr.cycle_batch_mode("@0")

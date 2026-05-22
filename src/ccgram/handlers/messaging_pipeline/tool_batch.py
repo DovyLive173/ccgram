@@ -24,7 +24,7 @@ from ...telegram_client import TelegramClient, unwrap_bot
 from ...telegram_draft import DraftStream
 from ...thread_router import thread_router
 from ...topic_state_registry import topic_state
-from ...window_query import get_batch_mode
+from ...window_query import get_batch_mode, is_ephemeral_tools
 from .message_task import ContentTask, thread_key
 
 logger = structlog.get_logger()
@@ -77,10 +77,9 @@ _BATCH_SUCCESS_RE = re.compile(r"\b(passed|success|exit code 0)\b", re.IGNORECAS
 
 def is_batch_eligible(task: ContentTask) -> bool:
     """Check if a task should go through the batching pipeline."""
-    return (
-        task.content_type in ("tool_use", "tool_result")
-        and get_batch_mode(task.window_id) == "batched"
-    )
+    return task.content_type in ("tool_use", "tool_result") and get_batch_mode(
+        task.window_id
+    ) in ("batched", "ephemeral")
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +145,24 @@ def _format_task_create_batch(
     return "\n".join(lines)
 
 
+def _collect_standard_run(
+    entries: list[ToolBatchEntry], start: int
+) -> tuple[list[ToolBatchEntry], int]:
+    """Collect a consecutive run of standard (non-Task*) entries sharing tool_use_text and result bucket."""
+    first = entries[start]
+    run_text = first.tool_use_text
+    run_bucket = first.tool_result_text
+    run: list[ToolBatchEntry] = [first]
+    index = start + 1
+    while index < len(entries) and entries[index].tool_name not in _TASK_TOOL_NAMES:
+        nxt = entries[index]
+        if nxt.tool_use_text != run_text or nxt.tool_result_text != run_bucket:
+            break
+        run.append(nxt)
+        index += 1
+    return run, index
+
+
 def _format_mixed_batch_lines(entries: list[ToolBatchEntry]) -> list[str]:
     """Render batch body lines, grouping task-tool runs into task sections."""
     lines: list[str] = []
@@ -180,8 +197,8 @@ def _format_mixed_batch_lines(entries: list[ToolBatchEntry]) -> list[str]:
             index += 1
             continue
 
-        lines.append(_format_batch_entry(entry))
-        index += 1
+        run, index = _collect_standard_run(entries, index)
+        lines.append(_format_batch_entry(run[-1], count=len(run)))
 
     return lines
 
@@ -257,9 +274,11 @@ def _batch_result_prefix(result_text: str) -> str:
     return "\u23bf"
 
 
-def _format_batch_entry(entry: ToolBatchEntry) -> str:
+def _format_batch_entry(entry: ToolBatchEntry, count: int = 1) -> str:
     """Render one standard batch row."""
     line = entry.tool_use_text
+    if count > 1:
+        line = f"{line} \u00d7{count}"
     if entry.tool_result_text is not None:
         prefix = _batch_result_prefix(entry.tool_result_text)
         return f"{line}  {prefix}  {entry.tool_result_text}"
@@ -322,6 +341,22 @@ async def _send_or_edit_batch(
     subagent_label = build_subagent_label(get_subagent_names(batch.window_id))
     batch_text = format_batch_message(batch.entries, subagent_label=subagent_label)
 
+    if is_ephemeral_tools(batch.window_id):
+        # Lazy: message_sender ↔ tool_batch cycle through messaging_pipeline/__init__
+        from .message_sender import edit_with_fallback, safe_send
+
+        if batch.telegram_msg_id is None:
+            await clear_status_message(client, user_id, thread_id_or_0)
+            await _rate_limit_chat(chat_id)
+            msg = await safe_send(
+                client, chat_id, batch_text, message_thread_id=raw_thread_id
+            )
+            if msg is not None:
+                batch.telegram_msg_id = msg.message_id
+        else:
+            await edit_with_fallback(client, chat_id, batch.telegram_msg_id, batch_text)
+        return
+
     if batch.draft is None:
         await clear_status_message(client, user_id, thread_id_or_0)
         await _rate_limit_chat(chat_id)
@@ -360,15 +395,19 @@ async def _handle_tool_result(
 
     Returns (updated_batch, followup) — followup is non-None when the result
     could not be absorbed into the batch and should be delivered as content.
+    In ephemeral mode, orphan results (tool_use was FIFO-dropped) are dropped
+    silently: returns (None, None) instead of flushing + delivering as content.
     """
     if not task.tool_use_id or not batch:
         return None, task
     for entry in batch.entries:
         if entry.tool_use_id == task.tool_use_id:
             text = "\n".join(task.parts) if task.parts else ""
-            first_line = text.split("\n", 1)[0][:200]
+            first_line = text.split("\n", 1)[0][:72]
             entry.tool_result_text = first_line
             return batch, None
+    if is_ephemeral_tools(batch.window_id):
+        return None, None
     await flush_batch(client, user_id, thread_id_or_0)
     return None, task
 
@@ -376,9 +415,31 @@ async def _handle_tool_result(
 def _add_tool_use_entry(
     task: ContentTask,
     batch: ToolBatch,
+    ephemeral: bool = False,
 ) -> bool:
-    """Append a tool_use entry to the batch. Returns True if overflow occurred."""
+    """Append a tool_use entry to the batch. Returns True if overflow occurred.
+
+    In ephemeral mode, overflow drops oldest entries from the front (FIFO eviction)
+    until the new entry fits, and always returns False (no flush-to-new-batch).
+    """
     entry_text = "\n".join(task.parts) if task.parts else "tool call"
+    if ephemeral:
+        if len(entry_text) > BATCH_MAX_LENGTH:
+            entry_text = entry_text[: BATCH_MAX_LENGTH - 1] + "…"
+        while batch.entries and (
+            len(batch.entries) >= BATCH_MAX_ENTRIES
+            or batch.total_length + len(entry_text) > BATCH_MAX_LENGTH
+        ):
+            dropped = batch.entries.pop(0)
+            batch.total_length -= len(dropped.tool_use_text)
+        entry = ToolBatchEntry(
+            tool_use_id=task.tool_use_id,
+            tool_use_text=entry_text,
+            tool_name=task.tool_name,
+        )
+        batch.entries.append(entry)
+        batch.total_length += len(entry_text)
+        return False
     if (
         len(batch.entries) >= BATCH_MAX_ENTRIES
         or batch.total_length + len(entry_text) > BATCH_MAX_LENGTH
@@ -456,7 +517,8 @@ async def _handle_tool_use_event(
         batch = ToolBatch(window_id=window_id, thread_id=thread_id_or_0)
         _active_batches[bkey] = batch
 
-    overflow = _add_tool_use_entry(task, batch)
+    ephemeral = is_ephemeral_tools(window_id)
+    overflow = _add_tool_use_entry(task, batch, ephemeral=ephemeral)
     if overflow:
         await flush_batch(client, user_id, thread_id_or_0)
         batch = ToolBatch(window_id=window_id, thread_id=thread_id_or_0)
@@ -481,7 +543,10 @@ async def flush_if_active(
 async def flush_batch(
     client: TelegramClient, user_id: int, thread_id_or_0: int
 ) -> None:
-    """Finalize the active batch: do a final edit and clear state."""
+    """Finalize the active batch: do a final edit and clear state.
+
+    In ephemeral mode, deletes the tool message instead of finalizing it.
+    """
     # Lazy: only used inside the API error branch
     from telegram.error import TelegramError
 
@@ -492,6 +557,16 @@ async def flush_batch(
 
     thread_id: int | None = thread_id_or_0 if thread_id_or_0 != 0 else None
     chat_id = thread_router.resolve_chat_id(user_id, thread_id)
+
+    if is_ephemeral_tools(batch.window_id):
+        if batch.telegram_msg_id is not None:
+            try:
+                await client.delete_message(
+                    chat_id=chat_id, message_id=batch.telegram_msg_id
+                )
+            except TelegramError as exc:
+                logger.warning("flush_batch ephemeral delete failed: %s", exc)
+        return
 
     # Lazy: claude_task_state imports session readers; deferring keeps
     # this module's cold path tied only to the queue.

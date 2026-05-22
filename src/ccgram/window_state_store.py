@@ -30,8 +30,13 @@ APPROVAL_MODES: frozenset[str] = frozenset({"normal", "yolo"})
 DEFAULT_APPROVAL_MODE = "normal"
 YOLO_APPROVAL_MODE = "yolo"
 
-BATCH_MODES: frozenset[str] = frozenset({"batched", "verbose"})
+BATCH_MODES: frozenset[str] = frozenset({"batched", "ephemeral", "verbose"})
 DEFAULT_BATCH_MODE = "batched"
+_BATCH_CYCLE: dict[str, str] = {
+    "batched": "ephemeral",
+    "ephemeral": "verbose",
+    "verbose": "batched",
+}
 
 TOOL_CALL_VISIBILITY_MODES: tuple[str, ...] = ("default", "shown", "hidden")
 DEFAULT_TOOL_CALL_VISIBILITY: str = "default"
@@ -117,7 +122,7 @@ class WindowState:
         transcript_path: Direct path to JSONL transcript file (from hook payload)
         provider_name: Name of the agent provider for this window
         approval_mode: "normal" | "yolo"
-        batch_mode: "batched" | "verbose"
+        batch_mode: "batched" | "ephemeral" | "verbose"
         tool_call_visibility: "default" | "shown" | "hidden"
         external: True for windows owned by external tools (emdash) — never killed by ccgram
         origin: Lifecycle origin. Manual/external windows are never auto-killed by ccgram.
@@ -519,9 +524,9 @@ class WindowStateStore:
             self._schedule_save()
 
     def cycle_batch_mode(self, window_id: str) -> str:
-        """Toggle batch mode: batched ↔ verbose. Returns new mode."""
+        """Cycle batch mode: batched → ephemeral → verbose → batched. Returns new mode."""
         current = self.get_batch_mode(window_id)
-        new_mode = "verbose" if current == "batched" else "batched"
+        new_mode = _BATCH_CYCLE.get(current, "ephemeral")
         self.set_batch_mode(window_id, new_mode)
         return new_mode
 

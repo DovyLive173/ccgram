@@ -11,8 +11,10 @@ from ccgram.handlers.messaging_pipeline.tool_batch import (
     ToolBatch,
     ToolBatchEntry,
     _active_batches,
+    _add_tool_use_entry,
     _batch_result_prefix,
     _extract_task_create_title,
+    _format_mixed_batch_lines,
     _send_or_edit_batch,
     flush_batch,
     flush_if_active,
@@ -345,3 +347,76 @@ class TestDraftStreamIntegration:
         await flush_batch(bot, user_id=1, thread_id_or_0=10)
         bot.send_message.assert_not_called()
         bot.edit_message_text.assert_not_called()
+
+
+class TestDedupConsecutiveEntries:
+    def _entry(
+        self,
+        text: str = "📖 **Read** `foo.py`",
+        result: str | None = None,
+        name: str | None = None,
+    ) -> ToolBatchEntry:
+        return ToolBatchEntry(
+            tool_use_id=None,
+            tool_use_text=text,
+            tool_result_text=result,
+            tool_name=name,
+        )
+
+    def test_consecutive_identical_collapse_to_count(self) -> None:
+        entries = [
+            self._entry("📖 **Read** `x.py`", "12 lines"),
+            self._entry("📖 **Read** `x.py`", "12 lines"),
+            self._entry("📖 **Read** `x.py`", "12 lines"),
+        ]
+        lines = _format_mixed_batch_lines(entries)
+        assert len(lines) == 1
+        assert " ×3" in lines[0]
+        assert "12 lines" in lines[0]
+
+    def test_mixed_status_same_tool_use_text_not_merged(self) -> None:
+        entries = [
+            self._entry("📖 **Read** `x.py`", "12 lines"),
+            self._entry("📖 **Read** `x.py`", "error: not found"),
+        ]
+        lines = _format_mixed_batch_lines(entries)
+        assert len(lines) == 2
+        assert all(" ×" not in line for line in lines)
+
+    def test_non_consecutive_identical_not_merged(self) -> None:
+        entries = [
+            self._entry("📖 **Read** `x.py`", "12 lines"),
+            self._entry("✏️ **Edit** `x.py`", "ok"),
+            self._entry("📖 **Read** `x.py`", "12 lines"),
+        ]
+        lines = _format_mixed_batch_lines(entries)
+        assert len(lines) == 3
+        assert all(" ×" not in line for line in lines)
+
+    def test_task_create_run_unaffected_by_dedup(self) -> None:
+        entries = [
+            self._entry("**TaskCreate** `T1`", None, "TaskCreate"),
+            self._entry("**TaskCreate** `T2`", None, "TaskCreate"),
+        ]
+        lines = _format_mixed_batch_lines(entries)
+        assert all(" ×" not in line for line in lines)
+
+
+class TestOversizedEntryTruncation:
+    def test_oversized_entry_truncated(self) -> None:
+        from ccgram.handlers.messaging_pipeline.message_task import ContentTask
+
+        batch = ToolBatch(window_id="@0", thread_id=0)
+        big_text = "x" * (BATCH_MAX_LENGTH + 100)
+        task = ContentTask(
+            window_id="@0",
+            parts=(big_text,),
+            content_type="tool_use",
+            tool_use_id="tu1",
+            thread_id=0,
+        )
+        _add_tool_use_entry(task, batch, ephemeral=True)
+        assert len(batch.entries) == 1
+        assert len(batch.entries[0].tool_use_text) <= BATCH_MAX_LENGTH
+        assert batch.entries[0].tool_use_text.endswith("…")
+        assert batch.total_length <= BATCH_MAX_LENGTH
