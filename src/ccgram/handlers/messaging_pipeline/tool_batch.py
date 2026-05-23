@@ -53,6 +53,7 @@ class ToolBatch:
     telegram_msg_id: int | None = None
     total_length: int = 0
     draft: DraftStream | None = None
+    last_sent_text: str | None = None
 
 
 # Active tool batches: (user_id, thread_id_or_0) -> ToolBatch
@@ -62,13 +63,6 @@ _MARKDOWN_TOOL_PREFIX_RE = re.compile(r"^\*\*([^*]+)\*\*(.*)$")
 _PLAIN_TASK_CREATE_RE = re.compile(r"^TaskCreate\s+(.+)$")
 _TASK_TOOL_NAMES = frozenset({"TaskCreate", "TaskUpdate", "TaskList"})
 _MIN_BACKTICK_WRAPPED_LENGTH = 2
-
-_BATCH_ERROR_RE = re.compile(
-    r"\b(error|FAILED|fail(ed|ure[s]?)?|Exception|Traceback|exit code [1-9]\d*)\b",
-    re.IGNORECASE,
-)
-_BATCH_SUCCESS_RE = re.compile(r"\b(passed|success|exit code 0)\b", re.IGNORECASE)
-
 
 # ---------------------------------------------------------------------------
 # Public predicates
@@ -102,16 +96,9 @@ def format_batch_message(
     if task_create_message is not None:
         return task_create_message
 
-    count = len(entries)
-    label = "tool call" if count == 1 else "tool calls"
-    header = f"\u26a1 {count} {label}"
-    has_task_tools = any(entry.tool_name in _TASK_TOOL_NAMES for entry in entries)
-    if subagent_label and not has_task_tools:
-        header = f"{header} [{subagent_label}]"
-    lines = [header]
-    if subagent_label and has_task_tools:
+    lines: list[str] = []
+    if subagent_label:
         lines.append(subagent_label)
-
     lines.extend(_format_mixed_batch_lines(entries))
 
     return "\n".join(lines)
@@ -265,24 +252,12 @@ def _format_task_list_section(entry: ToolBatchEntry) -> list[str]:
     return [heading]
 
 
-def _batch_result_prefix(result_text: str) -> str:
-    """Choose a result indicator prefix based on content."""
-    if _BATCH_ERROR_RE.search(result_text):
-        return "\u274c"
-    if _BATCH_SUCCESS_RE.search(result_text):
-        return "\u2705"
-    return "\u23bf"
-
-
 def _format_batch_entry(entry: ToolBatchEntry, count: int = 1) -> str:
-    """Render one standard batch row."""
+    """Render one standard batch row \u2014 name + summary only, no status glyph."""
     line = entry.tool_use_text
     if count > 1:
         line = f"{line} \u00d7{count}"
-    if entry.tool_result_text is not None:
-        prefix = _batch_result_prefix(entry.tool_result_text)
-        return f"{line}  {prefix}  {entry.tool_result_text}"
-    return f"{line}  \u23f3"
+    return line
 
 
 def _extract_task_create_title(entry: ToolBatchEntry) -> str:
@@ -291,10 +266,28 @@ def _extract_task_create_title(entry: ToolBatchEntry) -> str:
 
 
 def _extract_task_tool_suffix(entry: ToolBatchEntry) -> str:
-    """Extract the summary text after a markdown/plain task-tool prefix."""
+    """Extract the summary text after a tool-call prefix.
+
+    Handles the current ``{emoji} {name}: {summary}`` shape plus two legacy
+    formats (``**Name** `summary`` and bare ``TaskCreate Title``) for back-
+    compat with anything still sitting in old batches.
+    """
     text = entry.tool_use_text.strip()
     if not text:
         return ""
+
+    # Current shape: "📋 taskcreate: `TITLE`" (inline-mono summary).
+    if ": " in text:
+        _, _, suffix = text.partition(": ")
+        suffix = suffix.strip()
+        if (
+            suffix.startswith("`")
+            and suffix.endswith("`")
+            and len(suffix) >= _MIN_BACKTICK_WRAPPED_LENGTH
+        ):
+            suffix = suffix[1:-1].strip()
+        if suffix:
+            return suffix
 
     markdown_match = _MARKDOWN_TOOL_PREFIX_RE.match(text)
     if markdown_match:
@@ -341,6 +334,13 @@ async def _send_or_edit_batch(
     subagent_label = build_subagent_label(get_subagent_names(batch.window_id))
     batch_text = format_batch_message(batch.entries, subagent_label=subagent_label)
 
+    # Skip no-op edits — the rendered text is identical to what's already on
+    # screen. A re-edit with the same text would trigger Telegram's "Message
+    # is not modified" error, and the legacy fallback path used to strip
+    # entities to "succeed", destroying the formatting.
+    if batch.telegram_msg_id is not None and batch.last_sent_text == batch_text:
+        return
+
     if is_ephemeral_tools(batch.window_id):
         # Lazy: message_sender ↔ tool_batch cycle through messaging_pipeline/__init__
         from .message_sender import edit_with_fallback, safe_send
@@ -353,8 +353,13 @@ async def _send_or_edit_batch(
             )
             if msg is not None:
                 batch.telegram_msg_id = msg.message_id
+                batch.last_sent_text = batch_text
         else:
-            await edit_with_fallback(client, chat_id, batch.telegram_msg_id, batch_text)
+            success = await edit_with_fallback(
+                client, chat_id, batch.telegram_msg_id, batch_text
+            )
+            if success:
+                batch.last_sent_text = batch_text
         return
 
     if batch.draft is None:
@@ -368,10 +373,12 @@ async def _send_or_edit_batch(
         msg_id = await batch.draft.start(batch_text)
         if msg_id is not None:
             batch.telegram_msg_id = msg_id
+            batch.last_sent_text = batch_text
         else:
             batch.draft = None
     else:
         await batch.draft.replace(batch_text)
+        batch.last_sent_text = batch_text
 
 
 async def _rate_limit_chat(chat_id: int) -> None:
@@ -609,6 +616,20 @@ async def flush_batch(
 def has_active_batch(user_id: int, thread_id_or_0: int) -> bool:
     """Check if there is an active batch for a (user, thread) pair."""
     return (user_id, thread_id_or_0) in _active_batches
+
+
+def has_ephemeral_active_batch(user_id: int, thread_id_or_0: int) -> bool:
+    """Return True if an active batch exists for this (user, thread) and the
+    batch's window is in ephemeral mode.
+
+    Used by the queue dispatcher to suppress status updates while an
+    ephemeral tool batch owns the bubble — the batch itself signals
+    activity, and replacing it with a status bubble causes a visible
+    flicker (formatted tool calls vanish, plain status appears, then the
+    assistant text replaces that).
+    """
+    batch = _active_batches.get((user_id, thread_id_or_0))
+    return batch is not None and is_ephemeral_tools(batch.window_id)
 
 
 @topic_state.register("topic")

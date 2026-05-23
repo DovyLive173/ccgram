@@ -12,13 +12,14 @@ from ccgram.handlers.messaging_pipeline.tool_batch import (
     ToolBatchEntry,
     _active_batches,
     _add_tool_use_entry,
-    _batch_result_prefix,
     _extract_task_create_title,
     _format_mixed_batch_lines,
     _send_or_edit_batch,
     flush_batch,
     flush_if_active,
     format_batch_message,
+    has_active_batch,
+    has_ephemeral_active_batch,
     is_batch_eligible,
     process_tool_event,
 )
@@ -29,9 +30,14 @@ class TestFormatBatchMessage:
     def test_single_entry_pending(self) -> None:
         entries = [ToolBatchEntry(tool_use_id="t1", tool_use_text="Read src/foo.py")]
         result = format_batch_message(entries)
-        assert result.startswith("\u26a1 1 tool call")
+        # No code-block fence — plain text with inline mono on summaries only.
+        assert "```" not in result
         assert "Read src/foo.py" in result
-        assert "\u23f3" in result
+        # No status glyph, no count header.
+        assert (
+            "\u23f3" not in result and "\u2705" not in result and "\u274c" not in result
+        )
+        assert "tool call" not in result
 
     def test_single_entry_with_result(self) -> None:
         entries = [
@@ -42,8 +48,9 @@ class TestFormatBatchMessage:
             )
         ]
         result = format_batch_message(entries)
-        assert "1 tool call" in result
-        assert "42 lines" in result
+        # Result text is intentionally dropped; only the tool line remains.
+        assert "Read src/foo.py" in result
+        assert "42 lines" not in result
         assert "\u23f3" not in result
 
     def test_multiple_entries(self) -> None:
@@ -53,7 +60,10 @@ class TestFormatBatchMessage:
             ToolBatchEntry(tool_use_id="t3", tool_use_text="Bash make test"),
         ]
         result = format_batch_message(entries)
-        assert "3 tool calls" in result
+        assert "Read src/foo.py" in result
+        assert "Edit src/bar.py" in result
+        assert "Bash make test" in result
+        assert "tool call" not in result
 
     def test_subagent_label_included(self) -> None:
         entries = [ToolBatchEntry(tool_use_id="t1", tool_use_text="Read src/foo.py")]
@@ -64,12 +74,12 @@ class TestFormatBatchMessage:
         entries = [
             ToolBatchEntry(
                 tool_use_id="t1",
-                tool_use_text="**TaskCreate** `Build the widget`",
+                tool_use_text="📋 taskcreate: Build the widget",
                 tool_name="TaskCreate",
             ),
             ToolBatchEntry(
                 tool_use_id="t2",
-                tool_use_text="**TaskCreate** `Test the widget`",
+                tool_use_text="📋 taskcreate: Test the widget",
                 tool_name="TaskCreate",
             ),
         ]
@@ -82,7 +92,7 @@ class TestFormatBatchMessage:
         entries = [
             ToolBatchEntry(
                 tool_use_id="t1",
-                tool_use_text="**TaskCreate** `Build the widget`",
+                tool_use_text="📋 taskcreate: Build the widget",
                 tool_name="TaskCreate",
                 tool_result_text="ok",
             ),
@@ -95,7 +105,7 @@ class TestExtractTaskCreateTitle:
     def test_markdown_format(self) -> None:
         entry = ToolBatchEntry(
             tool_use_id="t1",
-            tool_use_text="**TaskCreate** `Build the widget`",
+            tool_use_text="📋 taskcreate: Build the widget",
         )
         assert _extract_task_create_title(entry) == "Build the widget"
 
@@ -172,22 +182,47 @@ class TestIsBatchEligible:
         assert captured == ["@7"]
 
 
-class TestBatchResultPrefix:
-    @pytest.mark.parametrize(
-        "text,expected",
-        [
-            ("All tests passed", "\u2705"),
-            ("success", "\u2705"),
-            ("exit code 0", "\u2705"),
-            ("error: file not found", "\u274c"),
-            ("FAILED test_foo", "\u274c"),
-            ("exit code 1", "\u274c"),
-            ("42 lines", "\u23bf"),
-            ("ok", "\u23bf"),
-        ],
-    )
-    def test_prefix_selection(self, text: str, expected: str) -> None:
-        assert _batch_result_prefix(text) == expected
+class TestHasEphemeralActiveBatch:
+    """Helper used by the dispatcher to suppress status updates while an
+    ephemeral batch owns the bubble (prevents the visible flicker where the
+    formatted tool bubble is deleted, a plain status bubble takes its place,
+    and the assistant text replaces that)."""
+
+    def setup_method(self) -> None:
+        _active_batches.clear()
+
+    def teardown_method(self) -> None:
+        _active_batches.clear()
+
+    def test_no_batch_returns_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "ccgram.handlers.messaging_pipeline.tool_batch.is_ephemeral_tools",
+            lambda _wid: True,
+        )
+        assert has_active_batch(1, 10) is False
+        assert has_ephemeral_active_batch(1, 10) is False
+
+    def test_ephemeral_batch_returns_true(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "ccgram.handlers.messaging_pipeline.tool_batch.is_ephemeral_tools",
+            lambda _wid: True,
+        )
+        _active_batches[(1, 10)] = ToolBatch(window_id="@0", thread_id=10)
+        assert has_active_batch(1, 10) is True
+        assert has_ephemeral_active_batch(1, 10) is True
+
+    def test_non_ephemeral_batch_returns_false(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "ccgram.handlers.messaging_pipeline.tool_batch.is_ephemeral_tools",
+            lambda _wid: False,
+        )
+        _active_batches[(1, 10)] = ToolBatch(window_id="@0", thread_id=10)
+        assert has_active_batch(1, 10) is True
+        assert has_ephemeral_active_batch(1, 10) is False
 
 
 class TestBatchDataStructures:
@@ -262,6 +297,12 @@ class TestDraftStreamIntegration:
             "ccgram.handlers.messaging_pipeline.tool_batch.get_batch_mode",
             lambda _wid: "batched",
         )
+        # is_ephemeral_tools is imported directly; with the new ephemeral
+        # default it would route through safe_send instead of DraftStream.
+        monkeypatch.setattr(
+            "ccgram.handlers.messaging_pipeline.tool_batch.is_ephemeral_tools",
+            lambda _wid: False,
+        )
         yield
         _active_batches.clear()
         reset_draft_state()
@@ -297,9 +338,15 @@ class TestDraftStreamIntegration:
         assert batch.draft is not None
         assert batch.telegram_msg_id == 77
 
-    async def test_second_call_replaces_text_via_draft(
+    async def test_noop_re_render_does_not_re_edit(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """Result arrival doesn't change rendered text — must not re-edit.
+
+        Re-editing with identical text would trigger Telegram's "Message is
+        not modified" error and the legacy fallback path would strip the
+        entities, leaving the bubble visibly unformatted.
+        """
         monkeypatch.setattr(
             "ccgram.handlers.status.status_bubble.clear_status_message",
             AsyncMock(return_value=None),
@@ -312,8 +359,31 @@ class TestDraftStreamIntegration:
         )
         await _send_or_edit_batch(bot, 1, batch, 42, 10, 10)
 
-        # Second call (e.g. tool_result arriving) edits the same message.
+        # Standard entries don't render tool_result_text — re-render produces
+        # identical text and the edit must be skipped.
         batch.entries[0].tool_result_text = "42 lines"
+        await _send_or_edit_batch(bot, 1, batch, 42, 10, 10)
+
+        bot.send_message.assert_awaited_once()
+        bot.edit_message_text.assert_not_awaited()
+
+    async def test_second_call_edits_when_text_changes(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A second entry arriving genuinely changes the rendered text → real edit."""
+        monkeypatch.setattr(
+            "ccgram.handlers.status.status_bubble.clear_status_message",
+            AsyncMock(return_value=None),
+        )
+        bot = self._make_bot(send_id=77)
+
+        batch = ToolBatch(window_id="@0", thread_id=10)
+        batch.entries.append(
+            ToolBatchEntry(tool_use_id="t1", tool_use_text="Read foo.py")
+        )
+        await _send_or_edit_batch(bot, 1, batch, 42, 10, 10)
+
+        batch.entries.append(ToolBatchEntry(tool_use_id="t2", tool_use_text="Bash ls"))
         await _send_or_edit_batch(bot, 1, batch, 42, 10, 10)
 
         bot.send_message.assert_awaited_once()
@@ -365,14 +435,15 @@ class TestDedupConsecutiveEntries:
 
     def test_consecutive_identical_collapse_to_count(self) -> None:
         entries = [
-            self._entry("📖 **Read** `x.py`", "12 lines"),
-            self._entry("📖 **Read** `x.py`", "12 lines"),
-            self._entry("📖 **Read** `x.py`", "12 lines"),
+            self._entry("📖 read: x.py", "12 lines"),
+            self._entry("📖 read: x.py", "12 lines"),
+            self._entry("📖 read: x.py", "12 lines"),
         ]
         lines = _format_mixed_batch_lines(entries)
         assert len(lines) == 1
         assert " ×3" in lines[0]
-        assert "12 lines" in lines[0]
+        # result text is intentionally not rendered in the new format.
+        assert "12 lines" not in lines[0]
 
     def test_mixed_status_same_tool_use_text_not_merged(self) -> None:
         entries = [
@@ -395,8 +466,8 @@ class TestDedupConsecutiveEntries:
 
     def test_task_create_run_unaffected_by_dedup(self) -> None:
         entries = [
-            self._entry("**TaskCreate** `T1`", None, "TaskCreate"),
-            self._entry("**TaskCreate** `T2`", None, "TaskCreate"),
+            self._entry("📋 taskcreate: T1", None, "TaskCreate"),
+            self._entry("📋 taskcreate: T2", None, "TaskCreate"),
         ]
         lines = _format_mixed_batch_lines(entries)
         assert all(" ×" not in line for line in lines)
